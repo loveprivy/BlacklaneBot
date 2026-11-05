@@ -9,7 +9,7 @@ object OfferParser {
 
     // Matches patterns like "14 Aug · 12:30" or "Thu 14 Aug · 12:30" or "12:30"
     private val TIME_PATTERN = Pattern.compile(
-        "(?:(\\d{1,2})\\s+([A-Za-z]{3})\\s*[·•\\-]\\s*)?(\\d{1,2}):(\\d{2})"
+        "(?:(\\d{1,2})\\s+([A-Za-z]{3})\\s*[\u00b7\\-\\ ]\\s*)?(\\d{1,2}):(\\d{2})"
     )
 
     private val MONTH_MAP = mapOf(
@@ -18,14 +18,16 @@ object OfferParser {
         "sep" to 8, "oct" to 9, "nov" to 10, "dec" to 11
     )
 
-    fun isCanadaRide(text: String): Boolean {
-        val hasCanada = BotConfig.CANADA_KEYWORDS.any { kw ->
+    fun isFloridaRide(text: String): Boolean {
+        val hasFlorida = BotConfig.FLORIDA_KEYWORDS.any { kw ->
             text.contains(kw, ignoreCase = kw.trimStart().length == kw.length)
         }
-        val hasUSA = BotConfig.USA_KEYWORDS.any { kw -> text.contains(kw, ignoreCase = true) }
-        val result = hasCanada && !hasUSA
-        Log.d(TAG, "isCanada=$result hasCanada=$hasCanada hasUSA=$hasUSA | text snippet: ${text.take(80)}")
-        return result
+        Log.d(TAG, "isFlorida=$hasFlorida | text snippet: ${text.take(80)}")
+        return hasFlorida
+    }
+
+    fun isCanadaRide(text: String): Boolean {
+        return isFloridaRide(text)
     }
 
     fun isWithinTimeWindow(text: String, minHours: Float, maxHours: Float): Boolean {
@@ -35,32 +37,37 @@ object OfferParser {
             return false
         }
 
-        val day = matcher.group(1)?.toIntOrNull()
-        val monthStr = matcher.group(2)?.lowercase()
-        val hour = matcher.group(3)?.toIntOrNull() ?: return false
-        val minute = matcher.group(4)?.toIntOrNull() ?: return false
+        val dayStr = matcher.group(1)
+        val monthStr = matcher.group(2)
+        val hourStr = matcher.group(3)
+        val minStr = matcher.group(4)
 
-        val now = Calendar.getInstance()
-        val ride = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, hour)
-            set(Calendar.MINUTE, minute)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
+        if (hourStr == null || minStr == null) return false
 
-            if (day != null && monthStr != null) {
-                MONTH_MAP[monthStr]?.let { set(Calendar.MONTH, it) }
-                set(Calendar.DAY_OF_MONTH, day)
-                // If parsed date is in the past, it's probably next year
-                if (before(now)) add(Calendar.YEAR, 1)
-            } else {
-                // Time only — if time is earlier than now, assume tomorrow
-                if (before(now)) add(Calendar.DAY_OF_MONTH, 1)
-            }
+        val target = Calendar.getInstance()
+
+        if (dayStr != null && monthStr != null) {
+            val monthIdx = MONTH_MAP[monthStr.lowercase()] ?: return false
+            target.set(Calendar.MONTH, monthIdx)
+            target.set(Calendar.DAY_OF_MONTH, dayStr.toInt())
         }
 
-        val diffMins = (ride.timeInMillis - now.timeInMillis) / 60_000.0
-        val inWindow = diffMins >= (minHours * 60) && diffMins <= (maxHours * 60)
-        Log.d(TAG, "Time check: ride=$hour:$minute diffMins=$diffMins window=${minHours*60}-${maxHours*60} inWindow=$inWindow")
-        return inWindow
+        target.set(Calendar.HOUR_OF_DAY, hourStr.toInt())
+        target.set(Calendar.MINUTE, minStr.toInt())
+        target.set(Calendar.SECOND, 0)
+        target.set(Calendar.MILLISECOND, 0)
+
+        val now = System.currentTimeMillis()
+        var diffMs = target.timeInMillis - now
+
+        if (dayStr == null && diffMs < 0) {
+            target.add(Calendar.DAY_OF_MONTH, 1)
+            diffMs = target.timeInMillis - now
+        }
+
+        val diffHours = diffMs.toFloat() / (1000 * 60 * 60)
+        val valid = diffHours in minHours..maxHours
+        Log.d(TAG, "Time diff: ${"%.2f".format(diffHours)}h, valid=$valid ($minHours..$maxHours)")
+        return valid
     }
 }
