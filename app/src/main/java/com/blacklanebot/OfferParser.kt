@@ -7,9 +7,8 @@ import java.util.regex.Pattern
 object OfferParser {
     private const val TAG = "BLBot-Parser"
 
-    // Matches patterns like "14 Aug · 12:30" or "Thu 14 Aug · 12:30" or "12:30"
     private val TIME_PATTERN = Pattern.compile(
-        "(?:(\\d{1,2})\\s+([A-Za-z]{3})\\s*[\u00b7\\-\\ ]\\s*)?(\\d{1,2}):(\\d{2})"
+        "(?:(\\d{1,2})\\s+([A-Za-z]{3})\\s*[\u00b7\\-\\| ]\\s*)?(\\d{1,2}):(\\d{2})"
     )
 
     private val MONTH_MAP = mapOf(
@@ -19,11 +18,16 @@ object OfferParser {
     )
 
     fun isFloridaRide(text: String): Boolean {
-        val hasFlorida = BotConfig.FLORIDA_KEYWORDS.any { kw ->
-            text.contains(kw, ignoreCase = kw.trimStart().length == kw.length)
+        try {
+            val hasFlorida = BotConfig.FLORIDA_KEYWORDS.any { kw ->
+                text.contains(kw, ignoreCase = true)
+            }
+            Log.d(TAG, "isFlorida=$hasFlorida | text snippet: ${text.take(80)}")
+            return hasFlorida
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking Florida ride: ", e)
+            return false
         }
-        Log.d(TAG, "isFlorida=$hasFlorida | text snippet: ${text.take(80)}")
-        return hasFlorida
     }
 
     fun isCanadaRide(text: String): Boolean {
@@ -31,43 +35,43 @@ object OfferParser {
     }
 
     fun isWithinTimeWindow(text: String, minHours: Float, maxHours: Float): Boolean {
-        val matcher = TIME_PATTERN.matcher(text)
-        if (!matcher.find()) {
-            Log.d(TAG, "No time found in: ${text.take(80)}")
+        try {
+            val matcher = TIME_PATTERN.matcher(text)
+            if (!matcher.find()) {
+                Log.d(TAG, "No time found in: ${text.take(80)}")
+                return false
+            }
+
+            val dayStr = matcher.group(1)
+            val monthStr = matcher.group(2)?.lowercase()
+            val hourStr = matcher.group(3)
+            val minStr = matcher.group(4)
+
+            val now = Calendar.getInstance()
+            val offerTime = Calendar.getInstance()
+
+            if (dayStr != null && monthStr != null && MONTH_MAP.containsKey(monthStr)) {
+                offerTime.set(Calendar.MONTH, MONTH_MAP[monthStr]!!)
+                offerTime.set(Calendar.DAY_OF_MONTH, dayStr.toInt())
+                if (offerTime.before(now)) {
+                    offerTime.add(Calendar.YEAR, 1)
+                }
+            }
+
+            offerTime.set(Calendar.HOUR_OF_DAY, hourStr?.toInt() ?: 0)
+            offerTime.set(Calendar.MINUTE, minStr?.toInt() ?: 0)
+            offerTime.set(Calendar.SECOND, 0)
+            offerTime.set(Calendar.MILLISECOND, 0)
+
+            val diffMs = offerTime.timeInMillis - now.timeInMillis
+            val diffHours = diffMs.toFloat() / (1000f * 60f * 60f)
+
+            val match = diffHours in minHours..maxHours
+            Log.d(TAG, "diffHours=$diffHours min=$minHours max=$maxHours match=$match")
+            return match
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking time window: ", e)
             return false
         }
-
-        val dayStr = matcher.group(1)
-        val monthStr = matcher.group(2)
-        val hourStr = matcher.group(3)
-        val minStr = matcher.group(4)
-
-        if (hourStr == null || minStr == null) return false
-
-        val target = Calendar.getInstance()
-
-        if (dayStr != null && monthStr != null) {
-            val monthIdx = MONTH_MAP[monthStr.lowercase()] ?: return false
-            target.set(Calendar.MONTH, monthIdx)
-            target.set(Calendar.DAY_OF_MONTH, dayStr.toInt())
-        }
-
-        target.set(Calendar.HOUR_OF_DAY, hourStr.toInt())
-        target.set(Calendar.MINUTE, minStr.toInt())
-        target.set(Calendar.SECOND, 0)
-        target.set(Calendar.MILLISECOND, 0)
-
-        val now = System.currentTimeMillis()
-        var diffMs = target.timeInMillis - now
-
-        if (dayStr == null && diffMs < 0) {
-            target.add(Calendar.DAY_OF_MONTH, 1)
-            diffMs = target.timeInMillis - now
-        }
-
-        val diffHours = diffMs.toFloat() / (1000 * 60 * 60)
-        val valid = diffHours in minHours..maxHours
-        Log.d(TAG, "Time diff: ${"%.2f".format(diffHours)}h, valid=$valid ($minHours..$maxHours)")
-        return valid
     }
 }
